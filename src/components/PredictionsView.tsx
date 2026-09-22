@@ -1,16 +1,20 @@
 /**
  * Scenario Probability & Backtesting Console
- * Strictly grounded in empirical historical sample sizes (N), confidence intervals,
- * and zero look-ahead bias backtest simulations.
+ * 
+ * Strict Principle:
+ * - Strictly grounded in empirical historical sample sizes (N), confidence intervals,
+ *   and zero look-ahead bias backtest simulations.
+ * - Displays empirical Sharpe Ratio only when mathematically sound (N >= 5 trades); otherwise shows N/A.
+ * - Clear demo fixture warnings when simulation fixtures are active.
  */
 
 import React, { useState } from 'react';
-import { Scale, Play, CheckCircle2, ShieldAlert, BarChart, Clock } from 'lucide-react';
+import { Scale, Play, CheckCircle2, ShieldAlert, BarChart, Clock, AlertTriangle, Settings2 } from 'lucide-react';
 import { Prediction } from '../types/index.ts';
 
 interface PredictionsViewProps {
   predictions: Prediction[];
-  onRunBacktest: (symbol: string, strategy: string) => Promise<any>;
+  onRunBacktest: (symbol: string, strategy: string, config?: any) => Promise<any>;
 }
 
 export const PredictionsView: React.FC<PredictionsViewProps> = ({
@@ -19,33 +23,50 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
 }) => {
   const [selectedSymbol, setSelectedSymbol] = useState('SCOM');
   const [strategy, setStrategy] = useState('Momentum Breakout');
+  const [capital, setCapital] = useState(200000);
+  const [slippageBps, setSlippageBps] = useState(15);
+  const [commissionPct, setCommissionPct] = useState(1.85);
   const [backtestResult, setBacktestResult] = useState<any>(null);
   const [isRunning, setIsRunning] = useState(false);
 
   const handleRun = async () => {
     setIsRunning(true);
     try {
-      const res = await onRunBacktest(selectedSymbol, strategy);
+      const res = await onRunBacktest(selectedSymbol, strategy, {
+        initialCapitalKes: capital,
+        slippageBps,
+        commissionPct
+      });
       setBacktestResult(res);
     } finally {
       setIsRunning(false);
     }
   };
 
+  const hasDemoFixture = predictions.some(p => p.isDemoFixture);
+
   return (
     <div id="predictions-view-root" className="space-y-4 font-mono">
       {/* Principle Banner */}
       <div className="bg-slate-900/80 p-4 rounded-lg border border-slate-800">
-        <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
-          <Scale className="w-4 h-4 text-emerald-400" />
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-            Empirical Probabilities & Backtesting Engine
-          </h2>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2">
+            <Scale className="w-4 h-4 text-emerald-400" />
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+              Empirical Probabilities & Walk-Forward Backtesting Engine
+            </h2>
+          </div>
+          {hasDemoFixture && (
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/80 text-amber-400 border border-amber-800 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              SPECIMEN / FIXTURE DATA ACTIVE
+            </span>
+          )}
         </div>
         <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
           The system strictly forbids unsubstantiated or hallucinated win-rate percentages.
-          Every scenario probability below represents an empirical historical calculation over a sample size (N)
-          with formal 95% confidence intervals and verified NSE transaction fees (1.85%).
+          Every scenario probability below represents an empirical historical calculation over a verifiable sample size (N)
+          with formal 95% confidence intervals and verified statutory NSE transaction costs.
         </p>
       </div>
 
@@ -53,7 +74,7 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
       <div className="rounded-lg bg-slate-900/80 border border-slate-800 p-4 space-y-3">
         <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-            Grounded Scenario Predictions (Active Samples)
+            Empirical Scenario Predictions (Grounded Samples)
           </h3>
           <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
             N &gt; 50 SAMPLES ENFORCED
@@ -68,6 +89,11 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
                   <span className="text-sm font-bold text-slate-100">{pred.assetSymbol}</span>
                   <span className="text-slate-400">&bull;</span>
                   <span className="text-xs font-semibold text-slate-200">{pred.setupName}</span>
+                  {pred.isDemoFixture && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-bold">
+                      DEMO SPECIMEN
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-slate-500">Sample N = {pred.historicalSampleSize}</span>
@@ -76,6 +102,12 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
                   </span>
                 </div>
               </div>
+
+              {pred.statusNotice && (
+                <div className="p-2 bg-amber-950/30 rounded border border-amber-800/50 text-[11px] text-amber-300">
+                  {pred.statusNotice}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
                 <div className="p-2 bg-slate-900/80 rounded border border-slate-800/80">
@@ -103,16 +135,24 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
 
       {/* Backtest Simulation Panel */}
       <div className="rounded-lg bg-slate-900/80 border border-slate-800 p-4 space-y-4">
-        <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-            Walk-Forward Backtesting Simulator (Zero Look-Ahead Bias)
-          </h3>
-          <span className="text-[10px] text-slate-500">Includes 15 bps slippage & 1.85% NSE costs</span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+              Walk-Forward Backtesting Simulator (Zero Look-Ahead Bias)
+            </h3>
+            <span className="text-[10px] text-slate-400">
+              Strict historical window isolation. Trades execute at bar t without knowing t+1.
+            </span>
+          </div>
+          <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+            DETERMINISTIC SIMULATION
+          </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {/* Configuration inputs */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Asset Symbol</label>
+            <label className="block text-[11px] text-slate-400 mb-1">Asset Symbol</label>
             <select
               value={selectedSymbol}
               onChange={e => setSelectedSymbol(e.target.value)}
@@ -122,11 +162,12 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
               <option value="EQTY">EQTY (Equity Group)</option>
               <option value="KCB">KCB (KCB Group)</option>
               <option value="EABL">EABL (East African Breweries)</option>
+              <option value="BAT">BAT (British American Tobacco)</option>
             </select>
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Strategy Specification</label>
+            <label className="block text-[11px] text-slate-400 mb-1">Strategy Specification</label>
             <select
               value={strategy}
               onChange={e => setStrategy(e.target.value)}
@@ -135,6 +176,27 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
               <option value="Momentum Breakout">20-Day Range Breakout Impulse</option>
               <option value="ATR Pullback Retest">Normal Pullback Retest (1.5x ATR)</option>
             </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] text-slate-400 mb-1">Initial Capital (KSh)</label>
+            <input
+              type="number"
+              value={capital}
+              onChange={e => setCapital(Number(e.target.value))}
+              step={10000}
+              className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-xs text-slate-200"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[11px] text-slate-400 mb-1">Slippage (Bps)</label>
+            <input
+              type="number"
+              value={slippageBps}
+              onChange={e => setSlippageBps(Number(e.target.value))}
+              className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-xs text-slate-200"
+            />
           </div>
 
           <div className="flex items-end">
@@ -152,7 +214,7 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
         {/* Backtest Result Display */}
         {backtestResult && (
           <div className="mt-4 p-4 rounded bg-slate-950/80 border border-slate-800 space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
               <div className="p-2 bg-slate-900 rounded border border-slate-800">
                 <span className="text-slate-400 block text-[10px]">TOTAL TRADES</span>
                 <span className="text-base font-bold text-slate-100">{backtestResult.run.totalTrades}</span>
@@ -164,6 +226,15 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
               <div className="p-2 bg-slate-900 rounded border border-slate-800">
                 <span className="text-slate-400 block text-[10px]">PROFIT FACTOR</span>
                 <span className="text-base font-bold text-slate-100">{backtestResult.run.profitFactor}</span>
+              </div>
+              <div className="p-2 bg-slate-900 rounded border border-slate-800">
+                <span className="text-slate-400 block text-[10px]">SHARPE RATIO</span>
+                <span className="text-base font-bold text-slate-100">
+                  {backtestResult.run.sharpeRatio !== undefined && backtestResult.run.sharpeRatio !== null
+                    ? backtestResult.run.sharpeRatio
+                    : 'N/A (N < 5)'}
+                </span>
+                <span className="text-[9px] text-slate-500 block">Empirical trade return std dev</span>
               </div>
               <div className="p-2 bg-slate-900 rounded border border-slate-800">
                 <span className="text-slate-400 block text-[10px]">MAX DRAWDOWN</span>
@@ -181,7 +252,7 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
             {/* Trade Log Table */}
             <div>
               <span className="text-[11px] font-bold text-slate-300 uppercase block mb-2">
-                Simulated Execution Log (Recent Trades)
+                Simulated Execution Log (Historical Walk-Forward)
               </span>
               <div className="max-h-56 overflow-y-auto border border-slate-800 rounded">
                 <table className="w-full text-left text-xs">
@@ -191,6 +262,7 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
                       <th className="py-2 px-2">Exit</th>
                       <th className="py-2 px-2 text-right">Entry (KES)</th>
                       <th className="py-2 px-2 text-right">Exit (KES)</th>
+                      <th className="py-2 px-2 text-right">Total Fees</th>
                       <th className="py-2 px-2 text-right">Net P/L (KES)</th>
                       <th className="py-2 px-3 text-right">Return</th>
                     </tr>
@@ -202,6 +274,9 @@ export const PredictionsView: React.FC<PredictionsViewProps> = ({
                         <td className="py-2 px-2 text-slate-400">{t.exitDate.split('T')[0]}</td>
                         <td className="py-2 px-2 text-right text-slate-300">{t.entryPrice.toFixed(2)}</td>
                         <td className="py-2 px-2 text-right text-slate-300">{t.exitPrice.toFixed(2)}</td>
+                        <td className="py-2 px-2 text-right text-slate-400">
+                          {t.feesKes ? `KSh ${t.feesKes.toFixed(2)}` : '1.85%'}
+                        </td>
                         <td className={`py-2 px-2 text-right font-bold ${t.netPlKes >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {t.netPlKes >= 0 ? '+' : ''}{t.netPlKes.toFixed(2)}
                         </td>

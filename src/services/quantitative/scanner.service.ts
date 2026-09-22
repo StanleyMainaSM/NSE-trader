@@ -3,104 +3,145 @@
  * 
  * Strict Principle:
  * - Rejects simplistic "biggest gainer = best setup" bias.
- * - Evaluates opportunity strictly in context: KSh/share movement, volume expansion,
- *   pullback health, and minimum exit liquidity.
+ * - Evaluates opportunity strictly in context: KSh/share movement, net KSh profit after
+ *   transaction costs, volume expansion, pullback health, and exit liquidity.
+ * - Categorizes setups and flags NO_TRADE states with deterministic rationale.
  */
 
-import { ScannerCandidate, ScannerCriteria, IntradayPrice, PriceBar, StockRegime } from '../../types/index.ts';
-import { calculateAtr, calculateRelativeVolume } from './calculations.ts';
+import { ScannerCandidate, ScannerCriteria, IntradayPrice, PriceBar, MarketRegimeType } from '../../types/index.ts';
 import { stockRegimeService } from './stock-regime.service.ts';
+import { opportunityService } from './opportunity.service.ts';
+
+const SYMBOL_METADATA: Record<string, { name: string; sector: string }> = {
+  SCOM: { name: 'Safaricom PLC', sector: 'TELECOMMUNICATIONS' },
+  EQTY: { name: 'Equity Group Holdings', sector: 'BANKING' },
+  KCB: { name: 'KCB Group PLC', sector: 'BANKING' },
+  EABL: { name: 'East African Breweries Ltd', sector: 'MANUFACTURING' },
+  BAT: { name: 'British American Tobacco Kenya', sector: 'MANUFACTURING' },
+  ABSA: { name: 'ABSA Bank Kenya PLC', sector: 'BANKING' },
+  SCBK: { name: 'Standard Chartered Bank Kenya', sector: 'BANKING' },
+  COOP: { name: 'Co-operative Bank of Kenya', sector: 'BANKING' },
+  NCBA: { name: 'NCBA Group PLC', sector: 'BANKING' },
+  KGEN: { name: 'Kenya Electricity Generating Co', sector: 'ENERGY' },
+  BAMB: { name: 'Bamburi Cement PLC', sector: 'CONSTRUCTION' },
+  TOTAL: { name: 'TotalEnergies Marketing Kenya', sector: 'ENERGY' }
+};
 
 export class ScannerService {
   public scan(
     quotes: IntradayPrice[],
     barsBySymbol: Map<string, PriceBar[]>,
-    criteria: ScannerCriteria = {}
+    criteria: ScannerCriteria = {},
+    tradingCapitalKes = 100000,
+    marketRegime: MarketRegimeType = 'NORMAL',
+    isDemoFixture = false
   ): ScannerCandidate[] {
     const candidates: ScannerCandidate[] = [];
 
-    const minKsh = criteria.minKshMovementPerShare ?? 0.20;
-    const minPct = criteria.minPercentageChange ?? 0.5;
-    const minRvol = criteria.minRelativeVolume ?? 1.1;
-    const minTurnover = criteria.minDailyTurnoverKes ?? 10000000; // 10M KSh default liquidity threshold
+    const minKsh = criteria.minKshMovementPerShare ?? 0.10;
+    const minPct = criteria.minPercentageChange ?? 0.25;
+    const minRvol = criteria.minRelativeVolume ?? 0.8;
+    const minTurnover = criteria.minDailyTurnoverKes ?? 500000; // 500k minimum threshold for scan
+    const allowNoTrade = criteria.allowNoTrade ?? true;
 
     for (const quote of quotes) {
-      // 1. Minimum liquidity check for NSE exitability
-      if (quote.dayTurnoverKes < minTurnover) {
-        continue;
-      }
-
       const bars = barsBySymbol.get(quote.symbol) || [];
-      const { atrKes, normalizedAtrPct } = calculateAtr(bars, 14);
-      const avgVol20 = bars.length > 0 
-        ? bars.slice(-20).reduce((acc, b) => acc + b.volume, 0) / Math.min(20, bars.length)
-        : quote.dayVolume;
-      const rvol = calculateRelativeVolume(quote.dayVolume, avgVol20);
-
       const regime = stockRegimeService.evaluateStockRegime(quote, bars);
 
-      const absKshMove = Math.abs(quote.changeKes);
-      const absPctMove = Math.abs(quote.changePct);
+      // Perform deep quantitative evaluation
+      const opp = opportunityService.evaluateOpportunity(
+        quote,
+        bars,
+        tradingCapitalKes,
+        marketRegime
+      );
 
       // Criteria filtering
-      if (absKshMove < minKsh && absPctMove < minPct) {
+      if (criteria.regimesAllowed && criteria.regimesAllowed.length > 0) {
+        if (!criteria.regimesAllowed.includes(regime.state)) {
+          continue;
+        }
+      }
+
+      if (criteria.volatilityMode === 'ELEVATED_ONLY' && opp.volatilityExpansionRatio < 1.1) {
         continue;
       }
 
-      let opportunityType: ScannerCandidate['opportunityType'] = 'MOMENTUM_ACCELERATION';
-      let score = 50;
-      let rationale = '';
-      let riskNote = '';
-
-      if (quote.changePct > 2.0 && rvol >= 1.5) {
-        opportunityType = 'BREAKOUT';
-        score = Math.min(95, 60 + Math.round(rvol * 10) + Math.round(quote.changePct * 4));
-        rationale = `Strong breakout impulse of +${quote.changeKes} KSh (+${quote.changePct}%) with ${rvol}x relative volume expansion.`;
-        riskNote = `Watch for intraday profit-taking near prior structural highs.`;
-      } else if (regime.isNormalPullback && quote.changePct < 0 && quote.changePct > -2.0) {
-        opportunityType = 'HEALTHY_PULLBACK';
-        score = 72;
-        rationale = `Controlled pullback of only ${Math.abs(quote.changeKes)} KSh within normal 1.5x ATR tolerance.`;
-        riskNote = `Ensure support holds before committing capital.`;
-      } else if (rvol >= minRvol && quote.changePct > 1.0) {
-        opportunityType = 'MOMENTUM_ACCELERATION';
-        score = 68;
-        rationale = `Positive momentum tick accompanied by above-average liquidity participation (${rvol}x RVOL).`;
-        riskNote = `Evaluate sector breadth before entering.`;
-      } else if (quote.changePct > 1.5 && regime.state === 'RECOVERY') {
-        opportunityType = 'RECOVERY_BOUNCE';
-        score = 65;
-        rationale = `Early recovery reversal off support zone with positive price response.`;
-        riskNote = `High failure risk if broad market enters sell-off.`;
-      } else {
+      if (criteria.volatilityMode === 'AMAC_LIKE_ONLY' && (opp.volatilityExpansionRatio < 1.25 || opp.relativeVolume < 1.4)) {
         continue;
+      }
+
+      // If NO_TRADE is filtered out and candidate is NO_TRADE
+      if (opp.isNoTrade && !allowNoTrade) {
+        continue;
+      }
+
+      // Filter by basic thresholds if not in allowNoTrade inspection mode
+      if (!allowNoTrade) {
+        if (quote.dayTurnoverKes < minTurnover) continue;
+        if (opp.kshMovementPerShare < minKsh && Math.abs(opp.changePct) < minPct) continue;
+        if (opp.relativeVolume < minRvol) continue;
+      }
+
+      const meta = SYMBOL_METADATA[quote.symbol] || { name: quote.symbol, sector: 'NSE' };
+
+      let riskNote = '';
+      if (opp.riskFlags.length > 0) {
+        riskNote = opp.riskFlags.join('; ');
+      } else if (opp.liquidityClassification === 'MODERATE') {
+        riskNote = 'Moderate liquidity: Size orders prudently to limit price impact.';
+      } else {
+        riskNote = 'Standard execution parameters apply.';
       }
 
       candidates.push({
         stockId: quote.stockId,
         symbol: quote.symbol,
-        name: quote.symbol, // mapped by UI
-        sector: 'NSE',
+        name: meta.name,
+        sector: meta.sector,
         currentPriceKes: quote.price,
         changeKes: quote.changeKes,
         changePct: quote.changePct,
         dailyVolume: quote.dayVolume,
         dailyTurnoverKes: quote.dayTurnoverKes,
-        relativeVolume: rvol,
-        atrKes,
-        normalizedAtrPct,
+        relativeVolume: opp.relativeVolume,
+        atrKes: opp.atrKes,
+        normalizedAtrPct: opp.normalizedAtrPct,
         currentRegime: regime.state,
-        opportunityType,
-        opportunityScore: score,
-        contextualRationale: rationale,
+        opportunityType: opp.setupType,
+        opportunityScore: opp.opportunityScore,
+        contextualRationale: opp.contextualRationale,
         riskNote,
+        
+        kshMovementPerShare: opp.kshMovementPerShare,
+        percentageChange: opp.changePct,
+        affordableShares: opp.affordableShares,
+        grossOpportunityKes: opp.grossOpportunityKes,
+        estimatedTransactionCostsKes: opp.estimatedTransactionCostsKes,
+        estimatedNetOpportunityKes: opp.estimatedNetOpportunityKes,
+        liquidityClassification: opp.liquidityClassification,
+        supportLevelKes: opp.supportLevelKes,
+        resistanceLevelKes: opp.resistanceLevelKes,
+        distanceToSupportPct: opp.distanceToSupportPct,
+        distanceToResistancePct: opp.distanceToResistancePct,
+        pullbackDepthAtrMultiple: opp.pullbackDepthAtrMultiple,
+        scoreComponents: opp.scoreComponents,
+        riskFlags: opp.riskFlags,
+        isNoTrade: opp.isNoTrade,
+        noTradeReasons: opp.noTradeReasons,
+        isDemoFixture,
+
         provenance: 'CALCULATED_METRIC',
         freshness: quote.freshness
       });
     }
 
-    // Sort by opportunity score descending
-    return candidates.sort((a, b) => b.opportunityScore - a.opportunityScore);
+    // Sort valid opportunities first by opportunity score descending, followed by NO_TRADE candidates
+    return candidates.sort((a, b) => {
+      if (a.isNoTrade && !b.isNoTrade) return 1;
+      if (!a.isNoTrade && b.isNoTrade) return -1;
+      return b.opportunityScore - a.opportunityScore;
+    });
   }
 }
 

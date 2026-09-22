@@ -170,11 +170,11 @@ export default function App() {
     }
   };
 
-  const handleRunBacktest = async (symbol: string, strategy: string) => {
+  const handleRunBacktest = async (symbol: string, strategy: string, config?: any) => {
     const res = await fetch('/api/backtest/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, strategyName: strategy })
+      body: JSON.stringify({ symbol, strategyName: strategy, ...(config || {}) })
     });
     if (res.ok) {
       return await res.json();

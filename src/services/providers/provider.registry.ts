@@ -75,6 +75,27 @@ class ProviderRegistry {
     if (statuses.includes('STALE')) return 'STALE';
     return 'UNAVAILABLE';
   }
+
+  public getActiveMarketProviderInfo(preferOfficial = false, isDemoAllowed = true): {
+    id: string;
+    name: string;
+    isOfficialLicense: boolean;
+    isDemoFixtureOnly: boolean;
+    status: ProviderStatus;
+    notice: string;
+  } {
+    const provider = this.getMarketDataProvider(preferOfficial, isDemoAllowed);
+    return {
+      id: provider.id,
+      name: provider.name,
+      isOfficialLicense: provider.isOfficialLicense,
+      isDemoFixtureOnly: provider.isDemoFixtureOnly,
+      status: provider.getHealth().status,
+      notice: provider.isDemoFixtureOnly 
+        ? 'SIMULATION / TEST FIXTURE MODE ACTIVE — Data is synthetic and for quantitative testing only.'
+        : 'OFFICIAL GATEWAY MODE'
+    };
+  }
 }
 
 export const providerRegistry = new ProviderRegistry();

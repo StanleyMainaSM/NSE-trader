@@ -101,11 +101,13 @@ export interface MarketIndex {
   freshness: DataFreshness;
 }
 
+export type TimeFrame = '1m' | '5m' | '15m' | '1h' | '1d' | '1w';
+
 export interface PriceBar {
   id: string;
   stockId: string;
   symbol: string;
-  timeframe: '1m' | '5m' | '15m' | '1h' | '1d' | '1w';
+  timeframe: TimeFrame;
   timestamp: string;      // ISO string in EAT (UTC+3)
   open: number;
   high: number;
@@ -475,6 +477,8 @@ export interface Prediction {
   modelVersion: string;
   isEmpirical: boolean;          // true = calculated from historical sample, false = forbidden
   status: 'PENDING' | 'HIT_TARGET' | 'HIT_ADVERSE' | 'EXPIRED_TIME' | 'INVALIDATED';
+  isDemoFixture?: boolean;
+  statusNotice?: string;
   outcomeVerifiedAt?: string;
   realizedGainKes?: number;
   realizedGainPct?: number;
@@ -502,7 +506,7 @@ export interface BacktestRun {
   totalTrades: number;
   winRatePct: number;
   profitFactor: number;
-  sharpeRatio: number;
+  sharpeRatio?: number;
   maxDrawdownPct: number;
   expectancyKesPerTrade: number;
   hasLookAheadBiasSafeguards: boolean;
@@ -667,6 +671,52 @@ export interface Alert {
   acknowledgedAt?: string;
 }
 
+export type LiquidityClassification = 
+  | 'VERY_LIQUID' 
+  | 'LIQUID' 
+  | 'MODERATE' 
+  | 'THIN' 
+  | 'VERY_THIN' 
+  | 'UNAVAILABLE'
+  | 'HIGH_LIQUIDITY'
+  | 'MODERATE_LIQUIDITY'
+  | 'LOW_LIQUIDITY'
+  | 'ILLIQUID';
+
+export interface LiquidityMetrics {
+  dailyTurnoverKes: number;
+  avg20DayTurnoverKes: number;
+  turnoverRatio: number;
+  relativeVolume: number;
+  tradeCount?: number;
+  avgTradeSizeKes?: number;
+  spreadKes?: number;
+  spreadBps?: number;
+  daysToLiquidate: number;
+  classification: LiquidityClassification;
+  warningNote?: string;
+}
+
+export interface TradingCalendar {
+  isMarketOpen: boolean;
+  sessionPhase: 'PRE_OPEN' | 'CONTINUOUS_TRADING' | 'CLOSING_AUCTION' | 'CLOSED';
+  nextOpen: string;
+  nextClose: string;
+  exchangeCode: string;
+}
+
+export type SetupType = 
+  | 'BREAKOUT'
+  | 'MOMENTUM_ACCELERATION'
+  | 'HEALTHY_PULLBACK'
+  | 'RECOVERY'
+  | 'REVERSAL_WATCH'
+  | 'VOLATILITY_EXPANSION'
+  | 'CONSOLIDATION'
+  | 'BREAKDOWN_RISK'
+  | 'EXTENDED_MOVE'
+  | 'NO_TRADE';
+
 export interface ScannerCriteria {
   minKshMovementPerShare?: number;
   minPercentageChange?: number;
@@ -677,6 +727,7 @@ export interface ScannerCriteria {
   allowBreakouts?: boolean;
   allowPullbacks?: boolean;
   allowRecoveries?: boolean;
+  allowNoTrade?: boolean;
 }
 
 export interface ScannerCandidate {
@@ -693,10 +744,45 @@ export interface ScannerCandidate {
   atrKes: number;
   normalizedAtrPct: number;
   currentRegime: StockRegimeType;
-  opportunityType: 'MOMENTUM_ACCELERATION' | 'BREAKOUT' | 'HEALTHY_PULLBACK' | 'RECOVERY_BOUNCE' | 'UNUSUAL_VOLUME';
+  opportunityType: SetupType | 'RECOVERY_BOUNCE' | 'UNUSUAL_VOLUME';
   opportunityScore: number; // 0 - 100
   contextualRationale: string;
   riskNote: string;
+  
+  // Extended quantitative metrics
+  kshMovementPerShare: number;
+  percentageChange: number;
+  affordableShares: number;
+  grossOpportunityKes: number;
+  estimatedTransactionCostsKes: number;
+  estimatedNetOpportunityKes: number;
+  netOpportunityKes?: number;
+  netOpportunityPct?: number;
+  estimatedRoundTripCostKes?: number;
+  estimatedSlippageBps?: number;
+  breakEvenPriceKes?: number;
+  exitTurnoverRatio?: number;
+  liquidityClassification: LiquidityClassification;
+  supportLevelKes?: number;
+  resistanceLevelKes?: number;
+  distanceToSupportPct?: number;
+  distanceToResistancePct?: number;
+  pullbackDepthAtrMultiple?: number;
+  scoreComponents?: {
+    kshOpportunity: number;
+    momentum: number;
+    relativeVolume: number;
+    volatilityExpansion: number;
+    liquidity: number;
+    priceStructure: number;
+    penalties: number;
+  };
+  riskFlags: string[];
+  isNoTrade: boolean;
+  noTradeReasons?: string[];
+  noTradeReason?: string;
+  isDemoFixture?: boolean;
+
   provenance: ObservationType;
   freshness: DataFreshness;
 }

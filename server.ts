@@ -18,8 +18,12 @@ import { alertService } from './src/services/alerts/alert.service.ts';
 import { newsIntelligenceService } from './src/services/news/news-intelligence.service.ts';
 import { predictionService } from './src/services/prediction/prediction.service.ts';
 import { backtestService } from './src/services/prediction/backtest.service.ts';
+import { transactionCostService } from './src/services/quantitative/transaction-cost.service.ts';
+import { liquidityService } from './src/services/quantitative/liquidity.service.ts';
+import { opportunityService } from './src/services/quantitative/opportunity.service.ts';
+import { priceHistoryService } from './src/services/historical/price-history.service.ts';
 import { logger } from './src/services/logger.ts';
-import { PortfolioPosition, UserSettings } from './src/types/index.ts';
+import { PortfolioPosition, UserSettings, TimeFrame } from './src/types/index.ts';
 
 const PORT = 3000;
 const app = express();
@@ -206,29 +210,184 @@ async function startServer() {
     }
   });
 
-  // Opportunity Scanner
+  // Price Bars with Historical SQLite persistence & multi-timeframe support
+  app.get('/api/market/bars/:symbol', async (req: Request, res: Response) => {
+    const symbol = req.params.symbol.toUpperCase();
+    const timeframe = (req.query.timeframe as TimeFrame) || '1d';
+    const limit = Number(req.query.limit) || 30;
+    const startDate = req.query.startDate as string | undefined;
+    const endDate = req.query.endDate as string | undefined;
+
+    try {
+      // 1. Try fetching from SQLite persistence
+      let bars = await priceHistoryService.getPriceBars(symbol, timeframe, { limit, startDate, endDate });
+
+      // 2. If SQLite has no bars yet, fetch from provider and cache into SQLite
+      if (bars.length === 0) {
+        const marketProvider = providerRegistry.getMarketDataProvider(false, true);
+        const providerBars = await marketProvider.getPriceBars(symbol, timeframe, limit);
+        if (providerBars.length > 0) {
+          await priceHistoryService.upsertPriceBars(providerBars);
+          bars = providerBars;
+        }
+      }
+
+      res.json({
+        symbol,
+        timeframe,
+        count: bars.length,
+        bars,
+        freshness: bars[bars.length - 1]?.freshness || 'HISTORICAL',
+        provenance: bars[bars.length - 1]?.provenance || 'ESTIMATE'
+      });
+    } catch (err: any) {
+      logger.error('API', `Failed to fetch price bars for ${symbol}`, err);
+      res.status(500).json({ error: `Failed to fetch price bars for ${symbol}` });
+    }
+  });
+
+  // Order Book Snapshot
+  app.get('/api/market/orderbook/:symbol', async (req: Request, res: Response) => {
+    const symbol = req.params.symbol.toUpperCase();
+    try {
+      const marketProvider = providerRegistry.getMarketDataProvider(false, true);
+      const orderBook = await marketProvider.getOrderBook(symbol);
+      res.json({
+        symbol,
+        orderBook,
+        isDemoFixture: marketProvider.isDemoFixtureOnly
+      });
+    } catch (err: any) {
+      logger.error('API', `Failed to fetch order book for ${symbol}`, err);
+      res.status(500).json({ error: `Failed to fetch order book for ${symbol}` });
+    }
+  });
+
+  // Trading Calendar & Exchange Status
+  app.get('/api/market/calendar', async (req: Request, res: Response) => {
+    try {
+      const marketProvider = providerRegistry.getMarketDataProvider(false, true);
+      const calendar = await marketProvider.getTradingCalendar();
+      res.json({
+        calendar,
+        isDemoFixture: marketProvider.isDemoFixtureOnly
+      });
+    } catch (err: any) {
+      logger.error('API', 'Failed to fetch trading calendar', err);
+      res.status(500).json({ error: 'Failed to fetch trading calendar' });
+    }
+  });
+
+  // Liquidity Profile Drill-Down
+  app.get('/api/market/liquidity/:symbol', async (req: Request, res: Response) => {
+    const symbol = req.params.symbol.toUpperCase();
+    try {
+      const marketProvider = providerRegistry.getMarketDataProvider(false, true);
+      const [quotes, bars, orderBook] = await Promise.all([
+        marketProvider.getIntradayPrices([symbol]),
+        marketProvider.getPriceBars(symbol, '1d', 30),
+        marketProvider.getOrderBook(symbol)
+      ]);
+
+      const quote = quotes[0];
+      if (!quote) {
+        return res.status(404).json({ error: `Quote for ${symbol} not available` });
+      }
+
+      const liquidityMetrics = liquidityService.evaluateLiquidity(quote, bars, orderBook);
+      res.json({
+        symbol,
+        quote,
+        liquidityMetrics,
+        isDemoFixture: marketProvider.isDemoFixtureOnly
+      });
+    } catch (err: any) {
+      logger.error('API', `Failed to evaluate liquidity for ${symbol}`, err);
+      res.status(500).json({ error: `Failed to evaluate liquidity for ${symbol}` });
+    }
+  });
+
+  // Transaction Cost & Net KSh Opportunity Calculation API
+  app.post('/api/quantitative/costs/roundtrip', (req: Request, res: Response) => {
+    try {
+      const { entryPrice, targetPrice, shares, brokerRatePct, slippageBps, liquidityTier } = req.body;
+      if (!entryPrice || !targetPrice || !shares) {
+        return res.status(400).json({ error: 'entryPrice, targetPrice, and shares are required' });
+      }
+
+      const breakdown = transactionCostService.calculateRoundTrip(
+        Number(entryPrice),
+        Number(targetPrice),
+        Number(shares),
+        {
+          brokerRatePct: brokerRatePct ? Number(brokerRatePct) : undefined,
+          slippageBps: slippageBps ? Number(slippageBps) : undefined,
+          liquidityTier
+        }
+      );
+
+      res.json(breakdown);
+    } catch (err: any) {
+      logger.error('API', 'Failed to calculate transaction costs', err);
+      res.status(500).json({ error: 'Failed to calculate transaction costs' });
+    }
+  });
+
+  // Opportunity Scanner with KSh Opportunity, Liquidity gating, and NO_TRADE analysis
   app.get('/api/scanner', async (req: Request, res: Response) => {
     try {
       const marketProvider = providerRegistry.getMarketDataProvider(false, true);
       const quotes = await marketProvider.getIntradayPrices();
 
+      // Retrieve user's configured trading capital
+      const settingsRow = await queryOne('SELECT trading_capital_kes FROM user_settings WHERE id = "usr-default"');
+      const tradingCapitalKes = Number(req.query.capital) || settingsRow?.trading_capital_kes || 100000;
+      const allowNoTrade = req.query.allowNoTrade !== 'false';
+      const volatilityMode = req.query.volatilityMode as any;
+
       const barsBySymbol = new Map();
       await Promise.all(
         quotes.map(async q => {
-          const bars = await marketProvider.getPriceBars(q.symbol, '1d', 25);
+          const bars = await marketProvider.getPriceBars(q.symbol, '1d', 30);
           barsBySymbol.set(q.symbol, bars);
         })
       );
 
-      const candidates = scannerService.scan(quotes, barsBySymbol, {
-        minDailyTurnoverKes: 1000000 // reasonable threshold for scan
-      });
+      // Check current market regime
+      const [indices, breadth] = await Promise.all([
+        marketProvider.getMarketIndices(),
+        marketProvider.getMarketBreadth()
+      ]);
+      const marketRegime = marketRegimeService.evaluateRegime(indices, breadth);
+
+      const candidates = scannerService.scan(
+        quotes,
+        barsBySymbol,
+        {
+          minDailyTurnoverKes: Number(req.query.minTurnover) || 500000,
+          minKshMovementPerShare: req.query.minKsh ? Number(req.query.minKsh) : undefined,
+          minPercentageChange: req.query.minPct ? Number(req.query.minPct) : undefined,
+          minRelativeVolume: req.query.minRvol ? Number(req.query.minRvol) : undefined,
+          volatilityMode,
+          allowNoTrade
+        },
+        tradingCapitalKes,
+        marketRegime.state,
+        marketProvider.isDemoFixtureOnly
+      );
 
       res.json({
         candidates,
         totalScanned: quotes.length,
+        viableCandidatesCount: candidates.filter(c => !c.isNoTrade).length,
+        noTradeCandidatesCount: candidates.filter(c => c.isNoTrade).length,
+        tradingCapitalKes,
+        marketRegime: marketRegime.state,
         timestamp: new Date().toISOString(),
-        isDemoFixture: marketProvider.isDemoFixtureOnly
+        isDemoFixture: marketProvider.isDemoFixtureOnly,
+        provenanceNotice: marketProvider.isDemoFixtureOnly
+          ? 'SIMULATION FIXTURES — Candidates generated from synthetic demo observations for structural testing.'
+          : 'OFFICIAL MARKET FEED'
       });
     } catch (err: any) {
       logger.error('API', 'Scanner execution error', err);
@@ -376,21 +535,36 @@ async function startServer() {
   // Predictions & Backtest
   app.get('/api/predictions', async (req: Request, res: Response) => {
     try {
-      const sampleEmpirical = predictionService.createEmpiricalPrediction({
-        symbol: 'SCOM',
-        setupName: 'Post-Pullback Moving Average Rebound',
-        setupCriteria: 'Pullback <= 1.5x ATR into 20-day SMA with RVOL >= 1.2x on breakout session',
-        horizonSessions: 3,
-        targetGainPct: 4.5,
-        adverseRiskPct: 2.5,
-        currentPriceKes: 15.65,
-        historicalHits: 47,
-        historicalSampleSize: 68,
-        modelVersion: 'v1.0-empirical-nse'
-      });
+      const recent = await predictionService.getRecentPredictions();
+      let list = recent;
 
-      const list = [sampleEmpirical];
-      res.json({ predictions: list });
+      // If no stored predictions yet, supply transparently labeled simulation specimen
+      if (list.length === 0) {
+        const sampleEmpirical = predictionService.createEmpiricalPrediction({
+          symbol: 'SCOM',
+          setupName: 'Post-Pullback Moving Average Rebound',
+          setupCriteria: 'Pullback <= 1.5x ATR into 20-day SMA with RVOL >= 1.2x on breakout session',
+          horizonSessions: 3,
+          targetGainPct: 4.5,
+          adverseRiskPct: 2.5,
+          currentPriceKes: 15.65,
+          historicalHits: 47,
+          historicalSampleSize: 68,
+          modelVersion: 'v1.0-empirical-nse'
+        });
+
+        sampleEmpirical.isDemoFixture = true;
+        sampleEmpirical.isEmpirical = false;
+        sampleEmpirical.statusNotice = 'DEMO SPECIMEN — NOT LIVE PREDICTION. Real empirical models require verified historical trade observations.';
+        list = [sampleEmpirical];
+      }
+
+      const marketProvider = providerRegistry.getMarketDataProvider(false, true);
+      res.json({
+        predictions: list,
+        isDemoFixture: marketProvider.isDemoFixtureOnly || list.some(p => p.isDemoFixture),
+        provenanceNotice: 'STATISTICAL SCENARIOS & EMPIRICAL PROBABILITY ENGINE'
+      });
     } catch (err: any) {
       res.status(500).json({ error: 'Failed to retrieve predictions' });
     }
@@ -398,23 +572,51 @@ async function startServer() {
 
   app.post('/api/backtest/run', async (req: Request, res: Response) => {
     try {
-      const { symbol = 'SCOM', strategyName = 'Momentum Breakout' } = req.body;
-      const marketProvider = providerRegistry.getMarketDataProvider(false, true);
-      const bars = await marketProvider.getPriceBars(symbol, '1d', 90);
+      const {
+        symbol = 'SCOM',
+        strategyName = 'Momentum Breakout',
+        initialCapitalKes = 200000,
+        slippageBps = 15,
+        commissionPct = 1.85,
+        timeframe = '1d',
+        limit = 90
+      } = req.body;
+
+      const sym = (symbol as string).toUpperCase();
+      let bars = await priceHistoryService.getPriceBars(sym, timeframe as TimeFrame, { limit: Number(limit) });
+
+      if (bars.length < 25) {
+        const marketProvider = providerRegistry.getMarketDataProvider(false, true);
+        const providerBars = await marketProvider.getPriceBars(sym, timeframe as TimeFrame, Number(limit));
+        if (providerBars.length > 0) {
+          await priceHistoryService.upsertPriceBars(providerBars);
+          bars = providerBars;
+        }
+      }
+
+      if (bars.length < 25) {
+        return res.status(400).json({
+          error: `Insufficient historical bars for ${sym} (found ${bars.length}, need at least 25).`
+        });
+      }
 
       const simulation = backtestService.runSimulation(bars, {
         strategyName,
-        symbol,
+        symbol: sym,
         startDate: bars[0]?.timestamp || '',
         endDate: bars[bars.length - 1]?.timestamp || '',
         trainSplitPct: 70,
         walkForwardSteps: 3,
-        slippageBps: 15,
-        roundTripCommissionPct: 1.85,
-        initialCapitalKes: 200000
+        slippageBps: Number(slippageBps),
+        roundTripCommissionPct: Number(commissionPct),
+        initialCapitalKes: Number(initialCapitalKes)
       });
 
-      res.json(simulation);
+      res.json({
+        ...simulation,
+        provenance: 'SIMULATION_VALIDATION',
+        hasZeroLookAheadBias: true
+      });
     } catch (err: any) {
       logger.error('API', 'Backtest execution failed', err);
       res.status(500).json({ error: 'Backtest execution failed' });

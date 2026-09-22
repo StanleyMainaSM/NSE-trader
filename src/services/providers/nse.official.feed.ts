@@ -8,7 +8,7 @@
 
 import { BaseDataProvider } from './base.provider.ts';
 import { IMarketDataProvider } from './provider.interface.ts';
-import { IntradayPrice, PriceBar, MarketIndex, MarketBreadth } from '../../types/index.ts';
+import { IntradayPrice, PriceBar, MarketIndex, MarketBreadth, OrderBookSnapshot, TradingCalendar } from '../../types/index.ts';
 
 export class OfficialNseMarketDataProvider extends BaseDataProvider implements IMarketDataProvider {
   readonly id = 'nse-official-ats-gateway';
@@ -40,11 +40,45 @@ export class OfficialNseMarketDataProvider extends BaseDataProvider implements I
     return [];
   }
 
+  async getHistoricalBars(_symbol: string, _timeframe: string, _start: string, _end: string): Promise<PriceBar[]> {
+    return [];
+  }
+
+  async getOrderBook(_symbol: string): Promise<OrderBookSnapshot | null> {
+    return null;
+  }
+
   async getMarketIndices(): Promise<MarketIndex[]> {
     return [];
   }
 
   async getMarketBreadth(): Promise<MarketBreadth | null> {
     return null;
+  }
+
+  async getMarketTurnover(): Promise<{ totalTurnoverKes: number; timestamp: string; isEstimated: boolean }> {
+    return {
+      totalTurnoverKes: 0,
+      timestamp: new Date().toISOString(),
+      isEstimated: false
+    };
+  }
+
+  async getMarketVolume(): Promise<{ totalVolume: number; timestamp: string; isEstimated: boolean }> {
+    return {
+      totalVolume: 0,
+      timestamp: new Date().toISOString(),
+      isEstimated: false
+    };
+  }
+
+  async getTradingCalendar(): Promise<TradingCalendar> {
+    return {
+      isMarketOpen: false,
+      sessionPhase: 'CLOSED',
+      nextOpen: '09:00:00',
+      nextClose: '15:00:00',
+      exchangeCode: 'NSE'
+    };
   }
 }

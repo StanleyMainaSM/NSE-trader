@@ -14,6 +14,8 @@ import {
   PriceBar,
   MarketIndex,
   MarketBreadth,
+  OrderBookSnapshot,
+  TradingCalendar,
   NewsArticle,
   FundamentalSnapshot,
   CorporateAction
@@ -426,6 +428,83 @@ export class DemoFixtureProvider
       isDemoFixture: true,
       fetchLatencyMs: latency
     });
+  }
+
+  async getHistoricalBars(symbol: string, timeframe: string, start: string, end: string): Promise<PriceBar[]> {
+    const allBars = await this.getPriceBars(symbol, timeframe, 120);
+    const startTime = new Date(start).getTime();
+    const endTime = new Date(end).getTime();
+    return allBars.filter(b => {
+      const t = new Date(b.timestamp).getTime();
+      return (!isNaN(startTime) ? t >= startTime : true) && (!isNaN(endTime) ? t <= endTime : true);
+    });
+  }
+
+  async getOrderBook(symbol: string): Promise<OrderBookSnapshot | null> {
+    const quotes = await this.getIntradayPrices([symbol]);
+    const quote = quotes[0];
+    if (!quote) return null;
+
+    const basePrice = quote.price;
+    const tick = 0.05;
+    return {
+      id: `ob-${symbol}-demo-${Date.now()}`,
+      stockId: quote.stockId,
+      symbol,
+      timestamp: new Date().toISOString(),
+      bids: [
+        { price: Number((basePrice - tick).toFixed(2)), quantity: 45000, ordersCount: 8 },
+        { price: Number((basePrice - tick * 2).toFixed(2)), quantity: 92000, ordersCount: 14 },
+        { price: Number((basePrice - tick * 3).toFixed(2)), quantity: 120000, ordersCount: 22 }
+      ],
+      asks: [
+        { price: Number((basePrice + tick).toFixed(2)), quantity: 38000, ordersCount: 6 },
+        { price: Number((basePrice + tick * 2).toFixed(2)), quantity: 74000, ordersCount: 11 },
+        { price: Number((basePrice + tick * 3).toFixed(2)), quantity: 155000, ordersCount: 19 }
+      ],
+      spreadKes: Number((tick * 2).toFixed(2)),
+      spreadBps: Number((((tick * 2) / basePrice) * 10000).toFixed(1)),
+      bidDepthTotal: 257000,
+      askDepthTotal: 267000,
+      orderBookImbalanceRatio: Number(((257000 - 267000) / (257000 + 267000)).toFixed(3)),
+      hasLegitimateSource: false, // Explicitly false for demo simulation
+      dataSourceId: this.id
+    };
+  }
+
+  async getMarketTurnover(): Promise<{ totalTurnoverKes: number; timestamp: string; isEstimated: boolean }> {
+    const breadth = await this.getMarketBreadth();
+    return {
+      totalTurnoverKes: breadth?.totalMarketTurnoverKes || 485900000,
+      timestamp: new Date().toISOString(),
+      isEstimated: true
+    };
+  }
+
+  async getMarketVolume(): Promise<{ totalVolume: number; timestamp: string; isEstimated: boolean }> {
+    const breadth = await this.getMarketBreadth();
+    return {
+      totalVolume: breadth?.totalMarketVolume || 24500000,
+      timestamp: new Date().toISOString(),
+      isEstimated: true
+    };
+  }
+
+  async getTradingCalendar(): Promise<TradingCalendar> {
+    const now = new Date();
+    // Nairobi is UTC+3
+    const utcHours = now.getUTCHours();
+    const eatHours = (utcHours + 3) % 24;
+    const isWeekday = now.getUTCDay() >= 1 && now.getUTCDay() <= 5;
+    const isMarketHours = isWeekday && eatHours >= 9 && eatHours < 15;
+
+    return {
+      isMarketOpen: isMarketHours,
+      sessionPhase: isMarketHours ? 'CONTINUOUS_TRADING' : 'CLOSED',
+      nextOpen: '09:00:00 EAT',
+      nextClose: '15:00:00 EAT',
+      exchangeCode: 'NSE'
+    };
   }
 
   async getLatestArticles(_limit = 10): Promise<NewsArticle[]> {

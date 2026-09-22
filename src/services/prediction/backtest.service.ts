@@ -8,7 +8,7 @@
  */
 
 import { BacktestRun, BacktestResult, PriceBar } from '../../types/index.ts';
-import { calculateRoundTripTransactionCosts } from '../quantitative/calculations.ts';
+import { transactionCostService } from '../quantitative/transaction-cost.service.ts';
 
 export interface BacktestConfig {
   strategyName: string;
@@ -63,10 +63,16 @@ export class BacktestService {
 
         if (currentBar.close < tenPeriodLow || gainPct > 4.5 || gainPct < -2.5) {
           const exitPrice = currentBar.close * (1 - config.slippageBps / 10000);
-          const grossPl = (exitPrice - openPosition.entryPrice) * openPosition.shares;
-          const consideration = (openPosition.entryPrice + exitPrice) * openPosition.shares;
-          const fees = calculateRoundTripTransactionCosts(consideration, config.roundTripCommissionPct);
-          const netPl = grossPl - fees;
+          const roundTrip = transactionCostService.calculateRoundTrip(
+            openPosition.entryPrice,
+            exitPrice,
+            openPosition.shares,
+            { slippageBps: config.slippageBps }
+          );
+
+          const grossPl = roundTrip.grossOpportunityKes;
+          const fees = roundTrip.totalFrictionKes;
+          const netPl = roundTrip.netOpportunityKes;
 
           currentEquity += netPl;
           peakEquity = Math.max(peakEquity, currentEquity);
@@ -107,6 +113,20 @@ export class BacktestService {
     const totalNetPl = currentEquity - config.initialCapitalKes;
     const expectancy = tradeLogs.length > 0 ? Number((totalNetPl / tradeLogs.length).toFixed(2)) : 0;
 
+    // Calculate empirical Sharpe Ratio from trade return distribution (Requires >= 5 trades)
+    let calculatedSharpeRatio: number | undefined = undefined;
+    if (tradeLogs.length >= 5) {
+      const returns = tradeLogs.map(t => t.returnPct / 100);
+      const meanReturn = returns.reduce((acc, r) => acc + r, 0) / returns.length;
+      const variance = returns.reduce((acc, r) => acc + Math.pow(r - meanReturn, 2), 0) / (returns.length - 1);
+      const stdDev = Math.sqrt(variance);
+      // Risk free rate assumption ~9.5% annual (CBK T-bill ~0.038% per trade assuming 10d holding)
+      const perTradeRf = 0.0035;
+      if (stdDev > 0.0001) {
+        calculatedSharpeRatio = Number((((meanReturn - perTradeRf) / stdDev) * Math.sqrt(25)).toFixed(2));
+      }
+    }
+
     const runId = `bt-${Date.now()}`;
     const run: BacktestRun = {
       id: runId,
@@ -120,7 +140,7 @@ export class BacktestService {
       totalTrades: tradeLogs.length,
       winRatePct,
       profitFactor,
-      sharpeRatio: 1.45,
+      sharpeRatio: calculatedSharpeRatio,
       maxDrawdownPct: Number(maxDrawdownPct.toFixed(2)),
       expectancyKesPerTrade: expectancy,
       hasLookAheadBiasSafeguards: true,

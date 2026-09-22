@@ -15,6 +15,8 @@ import {
   PriceBar,
   MarketIndex,
   MarketBreadth,
+  OrderBookSnapshot,
+  TradingCalendar,
   NewsArticle,
   FundamentalSnapshot,
   CorporateAction
@@ -48,8 +50,13 @@ export interface IDataProvider {
 export interface IMarketDataProvider extends IDataProvider {
   getIntradayPrices(symbols?: string[]): Promise<IntradayPrice[]>;
   getPriceBars(symbol: string, timeframe: string, limit?: number): Promise<PriceBar[]>;
+  getHistoricalBars(symbol: string, timeframe: string, start: string, end: string): Promise<PriceBar[]>;
+  getOrderBook(symbol: string): Promise<OrderBookSnapshot | null>;
   getMarketIndices(): Promise<MarketIndex[]>;
   getMarketBreadth(): Promise<MarketBreadth | null>;
+  getMarketTurnover(): Promise<{ totalTurnoverKes: number; timestamp: string; isEstimated: boolean }>;
+  getMarketVolume(): Promise<{ totalVolume: number; timestamp: string; isEstimated: boolean }>;
+  getTradingCalendar(): Promise<TradingCalendar>;
 }
 
 export interface INewsProvider extends IDataProvider {
