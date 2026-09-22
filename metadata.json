@@ -1,0 +1,6 @@
+{
+  "name": "NSE Trading Intelligence System",
+  "description": "Private, personal Nairobi Securities Exchange (NSE) short-term trading intelligence platform with deterministic analytics, risk models, and data provenance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
